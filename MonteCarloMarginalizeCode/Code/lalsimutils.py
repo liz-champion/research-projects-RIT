@@ -38,9 +38,9 @@ import lalinspiral
 import lalmetaio
 
 from pylal import frutils
-from pylal import series
-from pylal.series import read_psd_xmldoc
-#from lal.series import read_psd_xmldoc
+from pylal import seriesutils as series
+#from pylal.series import read_psd_xmldoc
+from lal.series import read_psd_xmldoc
 import pylal
 
 __author__ = "Evan Ochsner <evano@gravity.phys.uwm.edu>, R. O'Shaughnessy"
@@ -2461,7 +2461,7 @@ def hlmoft_FromFD_dict(P,Lmax=2):
 
     return hlm_struct
 
-def hlmoft_SEOBv3_dict(P,Lmax=2):
+def hlmoft_SEOBv3_dict(P,Lmax=2,frame="J"):
     """
     Generate the TD h_lm -2-spin-weighted spherical harmonic modes of a GW
     with parameters P. Returns a dictionary of modes.
@@ -2470,7 +2470,10 @@ def hlmoft_SEOBv3_dict(P,Lmax=2):
 
     ampFac = (P.m1 + P.m2)/lal.MSUN_SI * lal.MRSUN_SI / P.dist
 
-    # inc is not consistent with the modern convention I will be reading in (spins aligned with L, hlm in the L frame)
+
+    # WARNING: The low-level call uses the OLD radiation-frame convention? No, that is explicitly changed in https://github.com/lscsoft/lalsuite/blob/master/lalsimulation/src/LALSimIMRSpinPrecEOB.c line 582...inclination is not used at all.
+    # need to make sure we are using a release with that convention
+    # Use zero inclination to make robust against bad frame issues.  Ideally use J frame to avoid problems
     hplus, hcross, dynHi, hlmPTS, hlmPTSHi, hIMRlmJTSHi, hLM, attachP = lalsim.SimIMRSpinEOBWaveformAll(0, P.deltaT, \
                                             P.m1, P.m2, P.fmin, P.dist, 0, \
                                             P.s1x, P.s1y, P.s1z, P.s2x, P.s2y, P.s2z)
@@ -3220,9 +3223,23 @@ def extend_swig_psd_series_to_sampling_requirements(raw_psd, dfRequired, fNyqReq
 #    psdNew.data.data = (np.array([raw_psd.data.data for j in np.arange(facStretch)])).transpose().flatten()  # a bit too large, but that's fine for our purposes
     return psdNew
 
-def get_psd_series_from_xmldoc(fname, inst):
-   # return read_psd_xmldoc(utils.load_filename(fname, contenthandler=series.LIGOLWContentHandler ))[inst]  # return value is pylal wrapping of the data type; index data by a.data[k]
-    return read_psd_xmldoc(utils.load_filename(fname ))[inst]  # return value is pylal wrapping of the data type; index data by a.data[k]
+
+my_content=lal.series.PSDContentHandler
+
+try:
+    my_content = pylal.series.LIGOLWContentHandler
+    def get_psd_series_from_xmldoc(fname, inst):
+        return read_psd_xmldoc(utils.load_filename(fname ,contenthandler = my_content))[inst]  # return value is pylal wrapping of the data type; index data by a.data[k]
+except:
+  try:
+    my_content = lal.series.PSDContentHandler
+
+    def get_psd_series_from_xmldoc(fname, inst):
+        return read_psd_xmldoc(utils.load_filename(fname ,contenthandler = my_content))[inst]  # return value is pylal wrapping of the data type; index data by a.data[k]
+  except:
+    def get_psd_series_from_xmldoc(fname, inst):
+        return read_psd_xmldoc(utils.load_filename(fname))[inst]  # return value is pylal wrapping of the data type; index data by a.data[k]
+
 
 def get_intp_psd_series_from_xmldoc(fname, inst):
     psd = get_psd_series_from_xmldoc(fname, inst)
@@ -3230,11 +3247,11 @@ def get_intp_psd_series_from_xmldoc(fname, inst):
 
 def resample_psd_series(psd, df=None, fmin=None, fmax=None):
     # handle pylal REAL8FrequencySeries
-    if isinstance(psd, pylal.xlal.datatypes.real8frequencyseries.REAL8FrequencySeries):
-        psd_fmin, psd_fmax, psd_df, data = psd.f0, psd.f0 + psd.deltaF*len(psd.data), psd.deltaF, psd.data
-        fvals_orig = psd.f0 + np.arange(len(psd.data))*psd.deltaF
+#    if isinstance(psd, pylal.xlal.datatypes.real8frequencyseries.REAL8FrequencySeries):
+#        psd_fmin, psd_fmax, psd_df, data = psd.f0, psd.f0 + psd.deltaF*len(psd.data), psd.deltaF, psd.data
+#        fvals_orig = psd.f0 + np.arange(len(psd.data))*psd.deltaF
     # handle SWIG REAL8FrequencySeries
-    elif isinstance(psd, lal.REAL8FrequencySeries):
+    if isinstance(psd, lal.REAL8FrequencySeries):
         psd_fmin, psd_fmax, psd_df, data = psd.f0, psd.f0 + psd.deltaF*len(psd.data.data), psd.deltaF, psd.data.data
         fvals_orig = psd.f0 + np.arange(psd.data.length)*psd_df
     # die horribly
@@ -3272,11 +3289,11 @@ def resample_psd_series(psd, df=None, fmin=None, fmax=None):
 
 def load_resample_and_clean_psd(psd_fname, det, deltaF,verbose=False):
     psd_here = get_psd_series_from_xmldoc(psd_fname, det)  # pylal type!
-    tmp = psd_here.data
+    tmp = psd_here.data.data
     if verbose:
-        print "Sanity check reporting : pre-extension, min is ", np.min(tmp), " and maximum is ", np.max(tmp)
+	print "Sanity check reporting : pre-extension, min is ", np.min(tmp), " and maximum is ", np.max(tmp)
     fmin = psd_here.f0
-    fmax = fmin + psd_here.deltaF*len(psd_here.data)-deltaF
+    fmax = fmin + psd_here.deltaF*len(psd_here.data.data)-deltaF
     if verbose:
         print "PSD deltaF before interpolation %f" % psd_here.deltaF
     psd_here = resample_psd_series(psd_here, deltaF)
